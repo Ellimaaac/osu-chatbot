@@ -2,8 +2,7 @@
 """
 Chatbot osu! standard players (2007 -> today)
 
-- Lit les données depuis :
-  /kaggle/input/osustandard-players-from-2007-to-today/2025_05_16_players_info.csv
+- Lit les données depuis un CSV (Kaggle ou local dans le repo)
 - Interface de chat avec Streamlit
 - Répond à des questions simples sur les joueurs / pays / top rankings
 """
@@ -15,38 +14,60 @@ import pandas as pd
 import streamlit as st
 
 
-# ================== CONFIG ==================
+# ================== CHEMINS POSSIBLES VERS LE CSV ==================
 
-# Chemin Kaggle par défaut (tu peux le changer si besoin)
-DATA_PATH = "/kaggle/input/osustandard-players-from-2007-to-today/2025_05_16_players_info.csv"
+CANDIDATE_PATHS = [
+    # Chemin Kaggle (quand tu lances sur Kaggle)
+    "/kaggle/input/osustandard-players-from-2007-to-today/2025_05_16_players_info.csv",
+    # Chemin local racine du repo
+    "2025_05_16_players_info.csv",
+]
 
 
 # ================== CHARGEMENT DES DONNÉES ==================
 
 @st.cache_data(show_spinner=True)
-def load_players(path: str) -> pd.DataFrame:
-    """Charge le CSV des joueurs."""
-    if not os.path.exists(path):
-        st.error(f"Fichier introuvable : {path}")
-        return pd.DataFrame()
+def load_players():
+    """
+    Charge le CSV des joueurs.
 
-    df = pd.read_csv(path)
+    Retourne : (df, colmap)
+      - df : DataFrame complet
+      - colmap : dict avec les colonnes importantes détectées
+                 {"username": ..., "country": ..., "pp": ..., "rank": ...}
+    """
+    # 1) Trouver un chemin existant
+    csv_path = None
+    for path in CANDIDATE_PATHS:
+        if os.path.exists(path):
+            csv_path = path
+            break
 
-    # Normalise quelques noms de colonnes possibles (à adapter si nécessaire)
-    cols = {c.lower(): c for c in df.columns}  # map lowercase -> original
+    if csv_path is None:
+        raise FileNotFoundError(
+            "Impossible de trouver le CSV.\n"
+            "Chemins testés :\n- " + "\n- ".join(CANDIDATE_PATHS)
+        )
 
-    # On essaie d'identifier ces colonnes si elles existent
+    # 2) Charger le CSV
+    df = pd.read_csv(csv_path)
+
+    # 3) Détection des colonnes importantes
+    cols = {c.lower(): c for c in df.columns}  # lowercase -> original
+
     username_col = cols.get("username") or cols.get("user") or cols.get("name")
     country_col = cols.get("country") or cols.get("country_code")
     pp_col = cols.get("pp") or cols.get("performance_points")
     rank_col = cols.get("global_rank") or cols.get("rank")
 
-    return df, {
+    colmap = {
         "username": username_col,
         "country": country_col,
         "pp": pp_col,
         "rank": rank_col,
     }
+
+    return df, colmap
 
 
 # ================== LOGIQUE DU CHATBOT ==================
@@ -54,10 +75,10 @@ def load_players(path: str) -> pd.DataFrame:
 def answer_question(question: str, df: pd.DataFrame, colmap: dict) -> str:
     """
     Génère une réponse simple à partir de la question et du DataFrame.
-    Pas d'IA ici : juste des règles + pandas.
+    Pas d'IA externe : juste des règles + pandas.
     """
     if df.empty:
-        return "Je n'ai pas pu charger les données des joueurs. Vérifie le chemin du CSV."
+        return "Je n'ai pas pu charger les données des joueurs."
 
     q = question.lower()
 
@@ -87,7 +108,6 @@ def answer_question(question: str, df: pd.DataFrame, colmap: dict) -> str:
         n = int(top_match.group(1))
         metric = None
 
-        # Choix de la métrique
         if "pp" in q and colmap.get("pp"):
             metric = colmap["pp"]
         elif "rank" in q and colmap.get("rank"):
@@ -102,17 +122,15 @@ def answer_question(question: str, df: pd.DataFrame, colmap: dict) -> str:
             )
 
         subset = df.dropna(subset=[metric])
-
-        # Pour un rang, on veut le plus petit ; pour les pp, le plus grand
-        ascending = "rank" in metric.lower()
+        ascending = "rank" in metric.lower()  # rank : plus petit = meilleur
         top_df = subset.sort_values(metric, ascending=ascending).head(n)
 
         username_col = colmap.get("username")
         country_col = colmap.get("country")
 
         lines = []
-        for i, row in top_df.iterrows():
-            name = str(row[username_col]) if username_col else f"id={i}"
+        for _, row in top_df.iterrows():
+            name = str(row[username_col]) if username_col else "?"
             val = row[metric]
             country = str(row[country_col]) if country_col else "??"
             lines.append(f"{name} ({country}) — {metric} = {val}")
@@ -126,7 +144,7 @@ def answer_question(question: str, df: pd.DataFrame, colmap: dict) -> str:
         if not country_col:
             return "Je ne trouve pas de colonne 'country' dans le dataset."
 
-        # On suppose un code pays en majuscules (ex : JP, FR, US)
+        # On cherche un code pays en majuscules (FR, JP, US...)
         country_match = re.search(r"\b([A-Z]{2})\b", question)
         if country_match:
             code = country_match.group(1)
@@ -153,9 +171,6 @@ def answer_question(question: str, df: pd.DataFrame, colmap: dict) -> str:
                 "Colonnes dispo : " + ", ".join(df.columns)
             )
 
-        # On essaie de récupérer un nom :
-        #   - texte entre guillemets "..."
-        #   - ou tout après le mot "joueur"/"player"
         name = None
         quoted = re.search(r'"([^"]+)"', question)
         if quoted:
@@ -179,7 +194,6 @@ def answer_question(question: str, df: pd.DataFrame, colmap: dict) -> str:
         if sub.empty:
             return f"Aucun joueur ne correspond à **{name}**."
 
-        # On limite aux 3 premiers résultats
         sub = sub.head(3)
         lines = []
         for _, row in sub.iterrows():
@@ -200,22 +214,19 @@ def answer_question(question: str, df: pd.DataFrame, colmap: dict) -> str:
 
         return "Voici ce que j’ai trouvé :\n\n" + "\n".join(f"- {ln}" for ln in lines)
 
-    # --- 6. Question générique : on renvoie quelques stats de base ---
+    # --- 6. Fallback : quelques stats globales ---
     num_cols = df.select_dtypes("number").columns
     text = [
-        f"Je ne suis pas sûr de comprendre ta question, mais voici quelques infos globales :",
+        "Je ne suis pas sûr de comprendre ta question, mais voici quelques infos :",
         f"- Nombre de joueurs : **{len(df):,}**".replace(",", " "),
     ]
     if len(num_cols) > 0:
-        # On prend 3 colonnes numériques pour résumer
         for col in num_cols[:3]:
             text.append(
                 f"- {col} : min={df[col].min():.2f}, max={df[col].max():.2f}, moyenne={df[col].mean():.2f}"
             )
 
-    text.append(
-        "\nTu peux demander : `help` ou `aide` pour voir des exemples de questions."
-    )
+    text.append("\nTu peux demander : `help` ou `aide` pour voir des exemples de questions.")
     return "\n".join(text)
 
 
@@ -226,26 +237,25 @@ def main():
 
     st.title("🎧 Chatbot osu! standard players (2007 → aujourd’hui)")
     st.write(
-        "Je réponds à des questions sur les joueurs à partir du fichier CSV Kaggle.\n"
+        "Je réponds à des questions sur les joueurs à partir du fichier CSV.\n"
         "Pose ta question en bas. Tu peux taper `help` pour voir des exemples."
     )
 
     # Chargement des données
-    with st.spinner("Chargement des données des joueurs..."):
-        df, colmap = load_players(DATA_PATH)
-
-    if df.empty:
+    try:
+        df, colmap = load_players()
+    except FileNotFoundError as e:
+        st.error(str(e))
         st.stop()
 
-    # Petit résumé dans la sidebar
+    # Résumé côté barre latérale
     st.sidebar.header("Données")
     st.sidebar.write(f"**Lignes :** {len(df):,}".replace(",", " "))
     st.sidebar.write(f"**Colonnes :** {len(df.columns)}")
     st.sidebar.write("Colonnes principales détectées :")
     for k, v in colmap.items():
         st.sidebar.write(f"- {k} → {v}")
-
-    st.sidebar.caption("Si un nom de colonne ne correspond pas, adapte le code dans `load_players`.")
+    st.sidebar.caption("Si un nom de colonne ne correspond pas, adapte la fonction load_players().")
 
     # Historique du chat
     if "messages" not in st.session_state:
@@ -259,29 +269,25 @@ def main():
                     "- `Combien de joueurs y a-t-il ?`\n"
                     "- `Top 10 joueurs par pp`\n"
                     "- `Infos sur le joueur Cookiezi`\n"
-                    "- `Combien de joueurs du JP ?`\n"
+                    "- `Combien de joueurs du FR ?`\n"
                 ),
             }
         ]
 
-    # Affichage de l'historique
+    # Afficher l’historique
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
 
     # Entrée utilisateur
     if prompt := st.chat_input("Pose une question sur les joueurs osu!..."):
-        # Ajout du message utilisateur
         st.session_state.messages.append({"role": "user", "content": prompt})
 
-        # Génération de la réponse
         answer = answer_question(prompt, df, colmap)
 
-        # Ajout de la réponse
         st.session_state.messages.append({"role": "assistant", "content": answer})
 
-        # Réafficher tout
-        st.experimental_rerun()
+        st.rerun()
 
 
 if __name__ == "__main__":
