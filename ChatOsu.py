@@ -28,16 +28,15 @@ CANDIDATE_PATHS = [
 
 @st.cache_data(show_spinner=True)
 @st.cache_data(show_spinner=True)
+@st.cache_data(show_spinner=True)
 def load_players():
     """
-    Charge le CSV des joueurs.
-
-    Retourne : (df, colmap)
-      - df : DataFrame complet
-      - colmap : dict avec les colonnes importantes détectées
-                 {"username": ..., "country": ..., "pp": ..., "rank": ...}
+    Charge le CSV des joueurs de manière extrêmement robuste.
+    Essaie plusieurs parseurs, séparateurs et encodings.
+    Retourne (df, colmap).
     """
-    # 1) Trouver un chemin existant
+
+    # 1. Vérifier les chemins possibles
     csv_path = None
     for path in CANDIDATE_PATHS:
         if os.path.exists(path):
@@ -50,30 +49,79 @@ def load_players():
             "Chemins testés :\n- " + "\n- ".join(CANDIDATE_PATHS)
         )
 
-    # 2) Charger le CSV de manière robuste
+    # 2. Essais successifs de parsing
+    parse_attempts = []
+
+    # ---- Tentative 1 : pandas standard (par défaut)
     try:
-        # tentative classique
-        df = pd.read_csv(csv_path, low_memory=False)
-    except pd.errors.ParserError:
-        # on réessaie avec des options plus tolérantes
+        df = pd.read_csv(csv_path)
+        parse_attempts.append("pandas default ✓")
+    except Exception as e:
+        parse_attempts.append(f"pandas default ✗ ({e})")
+        df = None
+
+    # ---- Tentative 2 : autodétection du séparateur avec Sniffer
+    if df is None:
+        try:
+            import csv
+            with open(csv_path, "r", encoding="utf-8") as f:
+                sample = f.read(50000)
+            dialect = csv.Sniffer().sniff(sample)
+            df = pd.read_csv(csv_path, sep=dialect.delimiter)
+            parse_attempts.append(f"Sniffer autodetect ✓ sep='{dialect.delimiter}'")
+        except Exception as e:
+            parse_attempts.append(f"Sniffer autodetect ✗ ({e})")
+            df = None
+
+    # ---- Tentative 3 : séparateur point-virgule
+    if df is None:
+        try:
+            df = pd.read_csv(csv_path, sep=";")
+            parse_attempts.append("sep=';' ✓")
+        except Exception as e:
+            parse_attempts.append(f"sep=';' ✗ ({e})")
+            df = None
+
+    # ---- Tentative 4 : parser python + skip bad lines
+    if df is None:
         try:
             df = pd.read_csv(
                 csv_path,
-                sep=";",              # séparateur alternatif
-                engine="python",      # parser plus souple
-                on_bad_lines="skip",  # ignore les lignes corrompues
-                low_memory=False,
+                engine="python",
+                sep=None,
+                on_bad_lines="skip",
             )
-            st.warning(
-                "⚠️ Le CSV avait un format particulier. "
-                "Je l'ai chargé avec `sep=';'` et en ignorant certaines lignes invalides."
-            )
+            parse_attempts.append("engine='python' autodetect ✓")
         except Exception as e:
-            st.error(f"Échec du parsing du CSV : {e}")
-            return pd.DataFrame(), {}
+            parse_attempts.append(f"engine='python' ✗ ({e})")
+            df = None
 
-    # 3) Détection des colonnes importantes
-    cols = {c.lower(): c for c in df.columns}  # lowercase -> original
+    # ---- Tentative 5 : encoding latin1
+    if df is None:
+        try:
+            df = pd.read_csv(csv_path, encoding="latin1")
+            parse_attempts.append("encoding='latin1' ✓")
+        except Exception as e:
+            parse_attempts.append(f"latin1 ✗ ({e})")
+            df = None
+
+    # ---- Si toujours aucun succès
+    if df is None:
+        st.error(
+            "**Impossible de parser le CSV**, même après plusieurs tentatives.\n\n"
+            "Rapport :\n- " + "\n- ".join(parse_attempts)
+        )
+        return pd.DataFrame(), {}
+
+    # On affiche le rapport dans la console Streamlit
+    st.sidebar.info(
+        "Méthode de parsing utilisée :\n\n- " + "\n- ".join(parse_attempts)
+    )
+
+    # =============================
+    # Détection des colonnes utiles
+    # =============================
+    cols = {c.lower(): c for c in df.columns}
 
     username_col = cols.get("username") or cols.get("user") or cols.get("name")
     country_col = cols.get("country") or cols.get("country_code")
@@ -88,6 +136,7 @@ def load_players():
     }
 
     return df, colmap
+
 
 
 
