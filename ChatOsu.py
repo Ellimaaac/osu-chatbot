@@ -428,12 +428,6 @@ def main():
                 "content": (
                     "Salut ! Je suis le bot osu! 🌟\n\n"
                     "Je peux t'aider à explorer les joueurs de ce dataset.\n"
-                    "Exemples de questions :\n"
-                    "- Combien de joueurs y a-t-il ?\n"
-                    "- Top 10 joueurs par pp\n"
-                    "- Qui est peppy ?\n"
-                    "- Combien de joueurs du FR ?\n"
-                    "- Qui est le joueur avec le plus de pp ?\n"
                 ),
             }
         ]
