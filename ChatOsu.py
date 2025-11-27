@@ -36,7 +36,7 @@ CANDIDATE_PATHS = [
 # ================== CONFIG IA (GROQ) ==================
 
 GROQ_API_KEY = st.secrets.get("GROQ_API_KEY", os.getenv("GROQ_API_KEY"))
-GROQ_MODEL = "llama3-70b-8192"
+GROQ_MODEL = "llama-3.1-8b-instant"
 
 
 def get_groq_client():
