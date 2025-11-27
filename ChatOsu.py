@@ -144,7 +144,7 @@ def load_players():
 
 def answer_question(question: str, df: pd.DataFrame, colmap: dict) -> str:
     """
-    Génère une réponse simple à partir de la question et du DataFrame.
+    Génère une réponse à partir de la question et du DataFrame.
     Pas d'IA externe : juste des règles + pandas.
     """
     if df.empty:
@@ -160,8 +160,10 @@ def answer_question(question: str, df: pd.DataFrame, colmap: dict) -> str:
             "- `Combien de joueurs y a-t-il au total ?`\n"
             "- `Montre-moi les colonnes disponibles`\n"
             "- `Top 10 joueurs par pp`\n"
-            "- `Top 5 joueurs du Japon par pp`\n"
+            "- `Top 5 joueurs du JP par pp`\n"
             "- `Infos sur le joueur Cookiezi`\n"
+            "- `Qui est peppy ?`\n"
+            "- `Qui est le joueur avec le plus de pp ?`\n"
         )
 
     # --- 1. Colonnes / structure ---
@@ -172,10 +174,61 @@ def answer_question(question: str, df: pd.DataFrame, colmap: dict) -> str:
     if ("combien" in q or "how many" in q) and ("joueur" in q or "player" in q or "players" in q):
         return f"Le dataset contient **{len(df):,}** joueurs.".replace(",", " ")
 
-    # --- 3. Top N joueurs (global) ---
+    # --- 3. "Qui est <nom>" (ex: qui est peppy ?) ---
+    if ("qui est " in q or "who is " in q) and colmap.get("username"):
+        lower = question.lower()
+        if "qui est " in lower:
+            start = lower.find("qui est ") + len("qui est ")
+        else:
+            start = lower.find("who is ") + len("who is ")
+
+        # On récupère ce qui suit "qui est"
+        name = question[start:].strip(" ?!.\"'")
+
+        if not name:
+            return "Tu peux demander par ex. : `Qui est peppy ?` ou `Who is Cookiezi ?`"
+
+        username_col = colmap["username"]
+        sub = df[df[username_col].astype(str).str.contains(name, case=False, na=False)]
+
+        if sub.empty:
+            return f"Aucun joueur ne correspond à **{name}**."
+
+        sub = sub.head(3)
+        lines = []
+        country_col = colmap.get("country")
+        pp_col = colmap.get("pp")
+        rank_col = colmap.get("rank")
+
+        for _, row in sub.iterrows():
+            base = f"**{row[username_col]}**"
+            if country_col and country_col in row:
+                base += f" ({row[country_col]})"
+
+            extras = []
+            if pp_col and pp_col in row and pd.notna(row[pp_col]):
+                extras.append(f"{pp_col} = {row[pp_col]}")
+            if rank_col and rank_col in row and pd.notna(row[rank_col]):
+                extras.append(f"{rank_col} = {row[rank_col]}")
+
+            if extras:
+                base += " — " + ", ".join(extras)
+
+            lines.append(base)
+
+        return "Voici ce que j’ai trouvé :\n\n" + "\n".join(f"- {ln}" for ln in lines)
+
+    # --- 4. Top N joueurs (global) ---
+    import re
     top_match = re.search(r"top\s+(\d+)", q)
+    n = None
     if top_match:
         n = int(top_match.group(1))
+    # cas spécial : "joueur avec le plus de pp"
+    if n is None and ("plus de pp" in q or "most pp" in q or "le plus de pp" in q):
+        n = 1
+
+    if n is not None:
         metric = None
 
         if "pp" in q and colmap.get("pp"):
@@ -192,7 +245,7 @@ def answer_question(question: str, df: pd.DataFrame, colmap: dict) -> str:
             )
 
         subset = df.dropna(subset=[metric])
-        ascending = "rank" in metric.lower()  # rank : plus petit = meilleur
+        ascending = "rank" in metric.lower()  # pour un rang, plus petit = meilleur
         top_df = subset.sort_values(metric, ascending=ascending).head(n)
 
         username_col = colmap.get("username")
@@ -205,17 +258,20 @@ def answer_question(question: str, df: pd.DataFrame, colmap: dict) -> str:
             country = str(row[country_col]) if country_col else "??"
             lines.append(f"{name} ({country}) — {metric} = {val}")
 
-        header = f"Top {n} joueurs selon **{metric}** :\n\n"
-        return header + "\n".join(f"- {ln}" for ln in lines)
+        if n == 1:
+            return f"Le joueur avec le plus de **{metric}** est :\n\n- {lines[0]}"
+        else:
+            header = f"Top {n} joueurs selon **{metric}** :\n\n"
+            return header + "\n".join(f"- {ln}" for ln in lines)
 
-    # --- 4. Joueurs d'un pays ---
+    # --- 5. Joueurs d'un pays ---
     if "pays" in q or "country" in q:
         country_col = colmap.get("country")
         if not country_col:
             return "Je ne trouve pas de colonne 'country' dans le dataset."
 
-        # On cherche un code pays en majuscules (FR, JP, US...)
-        country_match = re.search(r"\b([A-Z]{2})\b", question)
+        import re as _re
+        country_match = _re.search(r"\b([A-Z]{2})\b", question)
         if country_match:
             code = country_match.group(1)
             sub = df[df[country_col] == code]
@@ -223,7 +279,7 @@ def answer_question(question: str, df: pd.DataFrame, colmap: dict) -> str:
                 return f"Aucun joueur trouvé pour le pays **{code}**."
             return (
                 f"Il y a **{len(sub):,}** joueurs pour le pays **{code}**.\n"
-                "Tu peux aussi demander par exemple : `Top 10 joueurs du FR par pp`."
+                "Tu peux aussi demander : `Top 10 joueurs du FR par pp`."
             ).replace(",", " ")
         else:
             return (
@@ -232,7 +288,7 @@ def answer_question(question: str, df: pd.DataFrame, colmap: dict) -> str:
                 "- `Top 5 joueurs du JP par pp`"
             )
 
-    # --- 5. Infos sur un joueur ---
+    # --- 6. Infos sur un joueur (version avec mot 'joueur'/'player') ---
     if "joueur" in q or "player" in q or "user" in q or "username" in q:
         username_col = colmap.get("username")
         if not username_col:
@@ -241,11 +297,12 @@ def answer_question(question: str, df: pd.DataFrame, colmap: dict) -> str:
                 "Colonnes dispo : " + ", ".join(df.columns)
             )
 
-        name = None
-        quoted = re.search(r'"([^"]+)"', question)
+        import re as _re
+        quoted = _re.search(r'"([^"]+)"', question)
         if quoted:
             name = quoted.group(1)
         else:
+            name = None
             for key in ["joueur", "player", "username", "user"]:
                 if key in q:
                     after = question.lower().split(key, 1)[1].strip()
@@ -266,17 +323,21 @@ def answer_question(question: str, df: pd.DataFrame, colmap: dict) -> str:
 
         sub = sub.head(3)
         lines = []
+        country_col = colmap.get("country")
+        pp_col = colmap.get("pp")
+        rank_col = colmap.get("rank")
+
         for _, row in sub.iterrows():
             base = f"**{row[username_col]}**"
-            country_col = colmap.get("country")
             if country_col and country_col in row:
                 base += f" ({row[country_col]})"
 
             extras = []
-            for key in ["pp", "rank"]:
-                col = colmap.get(key)
-                if col and col in row and pd.notna(row[col]):
-                    extras.append(f"{col} = {row[col]}")
+            if pp_col and pp_col in row and pd.notna(row[pp_col]):
+                extras.append(f"{pp_col} = {row[pp_col]}")
+            if rank_col and rank_col in row and pd.notna(row[rank_col]):
+                extras.append(f"{rank_col} = {row[rank_col]}")
+
             if extras:
                 base += " — " + ", ".join(extras)
 
@@ -284,20 +345,20 @@ def answer_question(question: str, df: pd.DataFrame, colmap: dict) -> str:
 
         return "Voici ce que j’ai trouvé :\n\n" + "\n".join(f"- {ln}" for ln in lines)
 
-    # --- 6. Fallback : quelques stats globales ---
+    # --- 7. Fallback : quelques stats globales ---
     num_cols = df.select_dtypes("number").columns
     text = [
         "Je ne suis pas sûr de comprendre ta question, mais voici quelques infos :",
         f"- Nombre de joueurs : **{len(df):,}**".replace(",", " "),
     ]
-    if len(num_cols) > 0:
-        for col in num_cols[:3]:
-            text.append(
-                f"- {col} : min={df[col].min():.2f}, max={df[col].max():.2f}, moyenne={df[col].mean():.2f}"
-            )
+    for col in num_cols[:3]:
+        text.append(
+            f"- {col} : min={df[col].min():.2f}, max={df[col].max():.2f}, moyenne={df[col].mean():.2f}"
+        )
 
     text.append("\nTu peux demander : `help` ou `aide` pour voir des exemples de questions.")
     return "\n".join(text)
+
 
 
 # ================== APP STREAMLIT ==================
