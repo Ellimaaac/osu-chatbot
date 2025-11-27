@@ -27,6 +27,7 @@ CANDIDATE_PATHS = [
 # ================== CHARGEMENT DES DONNÉES ==================
 
 @st.cache_data(show_spinner=True)
+@st.cache_data(show_spinner=True)
 def load_players():
     """
     Charge le CSV des joueurs.
@@ -49,8 +50,27 @@ def load_players():
             "Chemins testés :\n- " + "\n- ".join(CANDIDATE_PATHS)
         )
 
-    # 2) Charger le CSV
-    df = pd.read_csv(csv_path)
+    # 2) Charger le CSV de manière robuste
+    try:
+        # tentative classique
+        df = pd.read_csv(csv_path, low_memory=False)
+    except pd.errors.ParserError:
+        # on réessaie avec des options plus tolérantes
+        try:
+            df = pd.read_csv(
+                csv_path,
+                sep=";",              # séparateur alternatif
+                engine="python",      # parser plus souple
+                on_bad_lines="skip",  # ignore les lignes corrompues
+                low_memory=False,
+            )
+            st.warning(
+                "⚠️ Le CSV avait un format particulier. "
+                "Je l'ai chargé avec `sep=';'` et en ignorant certaines lignes invalides."
+            )
+        except Exception as e:
+            st.error(f"Échec du parsing du CSV : {e}")
+            return pd.DataFrame(), {}
 
     # 3) Détection des colonnes importantes
     cols = {c.lower(): c for c in df.columns}  # lowercase -> original
@@ -68,6 +88,7 @@ def load_players():
     }
 
     return df, colmap
+
 
 
 # ================== LOGIQUE DU CHATBOT ==================
